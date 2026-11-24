@@ -4,7 +4,9 @@
 function New-OvpnCheck {
     param([string]$Group, [string]$Name, [ValidateSet('OK', 'WARN', 'FAIL', 'INFO')][string]$Status, [string]$Detail = '', [string]$Fix = '', [switch]$Critical)
     $icon = switch ($Status) { 'OK' { [string][char]0x2714 } 'WARN' { [string][char]0x26A0 } 'FAIL' { [string][char]0x2716 } default { [string][char]0x2139 } }
-    [pscustomobject]@{ Icon = $icon; Status = $Status; Group = $Group; Name = $Name; Detail = $Detail; Fix = $Fix; Critical = [bool]$Critical }
+    $kind = switch ($Status) { 'OK' { 'Гаразд' } 'WARN' { 'Попередження' } 'FAIL' { if ($Critical) { 'Критична помилка — блокує зміни' } else { 'Помилка' } } default { 'Інформація (довідково)' } }
+    $tip = "$kind`n$Group / $Name`n`n$Detail" + $(if ($Fix) { "`n`nЩо зробити: $Fix" } else { '' })
+    [pscustomobject]@{ Icon = $icon; Status = $Status; Group = $Group; Name = $Name; Detail = $Detail; Fix = $Fix; Critical = [bool]$Critical; Tip = $tip }
 }
 
 function Get-RosVal {

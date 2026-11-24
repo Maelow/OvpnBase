@@ -171,13 +171,15 @@ $xaml = @'
     <Style x:Key="StatusGlyph" TargetType="TextBlock">
       <Setter Property="Foreground" Value="{StaticResource InfoBrush}"/><Setter Property="FontFamily" Value="Segoe UI Symbol"/>
       <Setter Property="FontSize" Value="14"/><Setter Property="HorizontalAlignment" Value="Center"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="ToolTip" Value="Інформація — довідково, дій не потрібно"/>
       <Style.Triggers>
-        <DataTrigger Binding="{Binding Status}" Value="OK"><Setter Property="Foreground" Value="{StaticResource OkBrush}"/></DataTrigger>
-        <DataTrigger Binding="{Binding Status}" Value="WARN"><Setter Property="Foreground" Value="{StaticResource WarnBrush}"/></DataTrigger>
-        <DataTrigger Binding="{Binding Status}" Value="FAIL"><Setter Property="Foreground" Value="{StaticResource FailBrush}"/></DataTrigger>
-        <DataTrigger Binding="{Binding Status}" Value="RUN"><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/></DataTrigger>
-        <DataTrigger Binding="{Binding Status}" Value="SKIP"><Setter Property="Foreground" Value="{StaticResource MutedBrush}"/></DataTrigger>
-        <DataTrigger Binding="{Binding Status}" Value="WAIT"><Setter Property="Foreground" Value="{StaticResource MutedBrush}"/></DataTrigger>
+        <DataTrigger Binding="{Binding Status}" Value="OK"><Setter Property="Foreground" Value="{StaticResource OkBrush}"/><Setter Property="ToolTip" Value="Гаразд — перевірку пройдено"/></DataTrigger>
+        <DataTrigger Binding="{Binding Status}" Value="WARN"><Setter Property="Foreground" Value="{StaticResource WarnBrush}"/><Setter Property="ToolTip" Value="Попередження — працює, але варто звернути увагу"/></DataTrigger>
+        <DataTrigger Binding="{Binding Status}" Value="FAIL"><Setter Property="Foreground" Value="{StaticResource FailBrush}"/><Setter Property="ToolTip" Value="Помилка — потрібно виправити; критичні блокують зміни"/></DataTrigger>
+        <DataTrigger Binding="{Binding Status}" Value="RUN"><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="ToolTip" Value="Виконується"/></DataTrigger>
+        <DataTrigger Binding="{Binding Status}" Value="SKIP"><Setter Property="Foreground" Value="{StaticResource MutedBrush}"/><Setter Property="ToolTip" Value="Пропущено / неактивно"/></DataTrigger>
+        <DataTrigger Binding="{Binding Status}" Value="WAIT"><Setter Property="Foreground" Value="{StaticResource MutedBrush}"/><Setter Property="ToolTip" Value="Очікує"/></DataTrigger>
       </Style.Triggers>
     </Style>
 
@@ -209,6 +211,14 @@ $xaml = @'
           <Setter Property="Background" Value="#24314A"/><Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
         </Trigger>
       </Style.Triggers>
+    </Style>
+    <Style TargetType="ToolTip">
+      <Setter Property="Background" Value="#232A36"/><Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource LineBrush}"/><Setter Property="Padding" Value="10,6"/>
+      <Setter Property="MaxWidth" Value="560"/>
+      <Setter Property="ContentTemplate">
+        <Setter.Value><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap"/></DataTemplate></Setter.Value>
+      </Setter>
     </Style>
     <Style x:Key="Wrap" TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style>
     <Style x:Key="WrapWarn" TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/><Setter Property="Foreground" Value="{StaticResource WarnBrush}"/></Style>
@@ -348,9 +358,10 @@ $xaml = @'
           <Grid Margin="0,0,0,14">
             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal">
-              <Border Background="#163326" CornerRadius="14" Padding="12,5" Margin="0,0,8,0"><TextBlock x:Name="TbSumOk" Foreground="{StaticResource OkBrush}" Text="✔ 0"/></Border>
-              <Border Background="#3A2D14" CornerRadius="14" Padding="12,5" Margin="0,0,8,0"><TextBlock x:Name="TbSumWarn" Foreground="{StaticResource WarnBrush}" Text="⚠ 0"/></Border>
-              <Border Background="#3A1A20" CornerRadius="14" Padding="12,5" Margin="0,0,8,0"><TextBlock x:Name="TbSumFail" Foreground="{StaticResource FailBrush}" Text="✖ 0"/></Border>
+              <Border Background="#163326" CornerRadius="14" Padding="12,5" Margin="0,0,8,0" ToolTip="Гаразд — перевірку пройдено"><TextBlock x:Name="TbSumOk" Foreground="{StaticResource OkBrush}" Text="✔ 0"/></Border>
+              <Border Background="#3A2D14" CornerRadius="14" Padding="12,5" Margin="0,0,8,0" ToolTip="Попередження — працює, але варто звернути увагу"><TextBlock x:Name="TbSumWarn" Foreground="{StaticResource WarnBrush}" Text="⚠ 0"/></Border>
+              <Border Background="#3A1A20" CornerRadius="14" Padding="12,5" Margin="0,0,8,0" ToolTip="Помилка — потрібно виправити; критичні блокують зміни"><TextBlock x:Name="TbSumFail" Foreground="{StaticResource FailBrush}" Text="✖ 0"/></Border>
+              <Border Background="#1A2540" CornerRadius="14" Padding="12,5" Margin="0,0,8,0" ToolTip="Інформація — довідково, дій не потрібно"><TextBlock x:Name="TbSumInfo" Foreground="{StaticResource InfoBrush}" Text="ℹ 0"/></Border>
               <TextBlock x:Name="TbDiagTime" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="8,0,0,0"/>
             </StackPanel>
             <StackPanel Grid.Column="2" Orientation="Horizontal">
@@ -361,6 +372,9 @@ $xaml = @'
           </Grid>
           <Border Grid.Row="1" Style="{StaticResource Card}" Padding="0" Margin="0">
             <DataGrid x:Name="DgDiag">
+              <DataGrid.RowStyle>
+                <Style TargetType="DataGridRow"><Setter Property="ToolTip" Value="{Binding Tip}"/></Style>
+              </DataGrid.RowStyle>
               <DataGrid.Columns>
                 <DataGridTemplateColumn Header="" Width="38">
                   <DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding Icon}" Style="{StaticResource StatusGlyph}"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
@@ -1068,6 +1082,7 @@ function Show-Checks {
     $ui.TbSumOk.Text = "$([char]0x2714) $(@($all | Where-Object { $_.Status -eq 'OK' }).Count)"
     $ui.TbSumWarn.Text = "$([char]0x26A0) $(@($all | Where-Object { $_.Status -eq 'WARN' }).Count)"
     $ui.TbSumFail.Text = "$([char]0x2716) $(@($all | Where-Object { $_.Status -eq 'FAIL' }).Count)"
+    $ui.TbSumInfo.Text = "$([char]0x2139) $(@($all | Where-Object { $_.Status -eq 'INFO' }).Count)"
     $items = if ($ui.CbOnlyProblems.IsChecked) { @($all | Where-Object { $_.Status -in @('WARN', 'FAIL') }) } else { $all }
     $ui.DgDiag.ItemsSource = $items
 }
@@ -1659,7 +1674,7 @@ if ($SmokeTest) {
                         $ui.BtnSetupPreview.RaiseEvent((New-Object System.Windows.RoutedEventArgs ([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent)))
                         $r = @("STATE=$([bool]$script:State)", "CHECKS=$(@($script:Checks).Count)", "GRID=$(@($ui.DgDiag.ItemsSource).Count)",
                             "SERVERS=$($ui.LbServers.Items.Count) SEL=$(Get-SelectedServerName)", "PORT=$($ui.TbPort.Text) :: $($ui.TbPortCheck.Text)",
-                            "CERTS=$(@($ui.DgCerts.ItemsSource).Count) SRVGRID=$(@($ui.DgServers.ItemsSource).Count)", "STATUS=$($ui.TbStatus.Text)",
+                            "CERTS=$(@($ui.DgCerts.ItemsSource).Count) SRVGRID=$(@($ui.DgServers.ItemsSource).Count)", "SUMINFO=$($ui.TbSumInfo.Text) TIP1=$((@($ui.DgDiag.ItemsSource)[3]).Tip -replace "`n",' | ')", "STATUS=$($ui.TbStatus.Text)",
                             "YEAR=$($ui.TbYear.Text) CERT=$($ui.TbCertName.Text) CN=$($ui.TbCertCn.Text) NEWSRV=$($ui.TbNewServer.Text) DAYS=$($ui.TbDays.Text) CUT=$($ui.TbCutDate.Text)",
                             "HOST=$($ui.TbHost.Text) ROUTES=$((Get-RoutesFromUi) -join ',') FRIENDLY=$($ui.TbFriendly.Text)",
                             "PERM-MISSING=$($script:SmokePerm.Missing -join ',')", "PERM-FIX:", ($script:SmokePerm.Fix -join "`r`n"),
