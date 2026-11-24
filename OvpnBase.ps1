@@ -392,6 +392,17 @@ $xaml = @'
       <!-- 3. CA + initial setup -->
       <TabItem x:Name="TabSetup" Header="CA і сервер" Tag="3" Style="{StaticResource Nav}">
         <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="24,20,24,10">
+          <Border x:Name="BdSetupBanner" CornerRadius="10" Padding="18,14" Margin="0,0,0,14" BorderThickness="1" Visibility="Collapsed">
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+              <TextBlock x:Name="TbSetupBannerIcon" FontFamily="Segoe UI Symbol" FontSize="22" Margin="0,0,14,0" VerticalAlignment="Center"/>
+              <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <TextBlock x:Name="TbSetupBannerTitle" FontSize="15" FontWeight="SemiBold"/>
+                <TextBlock x:Name="TbSetupBannerText" TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#C9D1DC"/>
+              </StackPanel>
+              <Button x:Name="BtnSetupToggle" Grid.Column="2" Style="{StaticResource Small}" VerticalAlignment="Center" Margin="14,0,0,0"/>
+            </Grid>
+          </Border>
           <Border Style="{StaticResource Card}">
             <StackPanel>
               <TextBlock Text="Стан OpenVPN на роутері" Style="{StaticResource H2}"/>
@@ -425,7 +436,7 @@ $xaml = @'
                   <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0" Text="Backup потрібен, щоб відновити CA після заміни чи скидання роутера (out\ca-backup\). Якщо поле заповнене — backup робиться й під час первинного налаштування."/>
                 </StackPanel>
               </Border>
-              <Border Style="{StaticResource Card}">
+              <Border x:Name="BdSetupSrvCert" Style="{StaticResource Card}">
                 <StackPanel>
                   <TextBlock Text="Серверний сертифікат" Style="{StaticResource H2}"/>
                   <Grid>
@@ -441,7 +452,7 @@ $xaml = @'
                 </StackPanel>
               </Border>
             </StackPanel>
-            <StackPanel Grid.Column="2">
+            <StackPanel x:Name="SpSetupRight" Grid.Column="2">
               <Border Style="{StaticResource Card}">
                 <StackPanel>
                   <TextBlock Text="Мережа і OpenVPN-сервер" Style="{StaticResource H2}"/>
@@ -486,7 +497,7 @@ $xaml = @'
               </Border>
             </StackPanel>
           </Grid>
-          <Border Style="{StaticResource Card}">
+          <Border x:Name="BdSetupRun" Style="{StaticResource Card}">
             <Grid>
               <Grid.ColumnDefinitions><ColumnDefinition Width="380"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
               <DockPanel>
@@ -1364,8 +1375,9 @@ function Update-SetupUi {
         $(if ($zt -and $zt.AllowRule) { "$([char]0x2714) Firewall: порт через $($st.AllowList) ($($zt.AllowRule['.id']))" } else { "$([char]0x25CB) Firewall: порт через $($st.AllowList) — буде додано" }),
         $(if (Test-RosTrue (Get-RosVal $st.Aaa 'use-radius')) { "$([char]0x2714) RADIUS для PPP увімкнено" } else { "$([char]0x25CB) RADIUS вимкнено (опційно)" })
     )
-    $all = ($ca -and $sc -and $srv)
-    $ui.TbSetupStatus.Text = ($lines -join "`n") + $(if ($all) { "`n`nOpenVPN уже налаштовано — первинне налаштування не потрібне (кроки буде пропущено)." } else { '' })
+    $all = [bool]($ca -and $sc -and $srv)
+    $ui.TbSetupStatus.Text = ($lines -join "`n")
+    Set-SetupMode -Configured $all
     if ($ca) {
         $ui.TbCaStatus.Text = "Знайдено: $($ca['name']) · CN=$($ca['common-name']) · $($ca['key-type']) $($ca['key-size']) · до $($ca['invalid-after']) · trusted=$($ca['trusted']) · приватний ключ: $(if (Test-RosTrue $ca['private-key']) { 'є' } else { 'НЕМАЄ' })"
         $ui.TbCaStatus.Foreground = $Window.FindResource($(if ((Test-RosTrue $ca['trusted']) -and (Test-RosTrue $ca['private-key'])) { 'OkBrush' } else { 'WarnBrush' }))
@@ -1375,6 +1387,50 @@ function Update-SetupUi {
     }
     $ui.BtnCaTrust.IsEnabled = [bool]($ca -and -not (Test-RosTrue $ca['trusted']))
     $ui.BtnCaBackup.IsEnabled = [bool]$ca
+}
+
+$script:SetupExpanded = $null   # $null = авто (згорнуто, якщо вже налаштовано)
+$script:SetupConfigured = $false
+
+function Set-SetupHeader([bool]$Optional) {
+    $sp = New-Object System.Windows.Controls.StackPanel
+    $t = New-Object System.Windows.Controls.TextBlock
+    $t.Text = 'CA і сервер'
+    [void]$sp.Children.Add($t)
+    if ($Optional) {
+        $h = New-Object System.Windows.Controls.TextBlock
+        $h.Text = "необов'язково — вже налаштовано"
+        $h.FontSize = 11
+        $h.Foreground = $Window.FindResource('OkBrush')
+        [void]$sp.Children.Add($h)
+    }
+    $ui.TabSetup.Header = $sp
+}
+
+function Set-SetupMode([bool]$Configured) {
+    $script:SetupConfigured = $Configured
+    Set-SetupHeader $Configured
+    $ui.BdSetupBanner.Visibility = 'Visible'
+    if ($Configured) {
+        $ui.BdSetupBanner.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x13, 0x2B, 0x22))
+        $ui.BdSetupBanner.BorderBrush = $Window.FindResource('OkBrush')
+        $ui.TbSetupBannerIcon.Text = [string][char]0x2714
+        $ui.TbSetupBannerIcon.Foreground = $Window.FindResource('OkBrush')
+        $ui.TbSetupBannerTitle.Text = "OpenVPN уже налаштовано — цю вкладку можна пропустити"
+        $ui.TbSetupBannerText.Text = "Для щорічного оновлення перейдіть до «Параметри року» → «Користувачі» → «Виконання». Тут рекомендовано лише один раз зробити «Зберегти backup CA» (блок «Кореневий CA» нижче). Первинне налаштування потрібне тільки для роутера, де OpenVPN ще не було."
+    } else {
+        $ui.BdSetupBanner.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x33, 0x29, 0x14))
+        $ui.BdSetupBanner.BorderBrush = $Window.FindResource('WarnBrush')
+        $ui.TbSetupBannerIcon.Text = [string][char]0x26A0
+        $ui.TbSetupBannerIcon.Foreground = $Window.FindResource('WarnBrush')
+        $ui.TbSetupBannerTitle.Text = 'OpenVPN на роутері ще не налаштовано — почніть з цієї вкладки'
+        $ui.TbSetupBannerText.Text = "Перевірте параметри нижче, натисніть «Переглянути зміни» і «Виконати». Об'єкти, які вже є (позначені ✔), буде пропущено. Після цього — «Параметри року»."
+    }
+    $expanded = if ($null -ne $script:SetupExpanded) { $script:SetupExpanded } else { -not $Configured }
+    $vis = if ($expanded) { 'Visible' } else { 'Collapsed' }
+    foreach ($n in @('BdSetupSrvCert', 'SpSetupRight', 'BdSetupRun')) { $ui[$n].Visibility = $vis }
+    $ui.BtnSetupToggle.Content = if ($expanded) { 'Згорнути первинне налаштування' } else { 'Показати первинне налаштування' }
+    $ui.BtnSetupToggle.Visibility = if ($Configured) { 'Visible' } else { 'Collapsed' }
 }
 
 function Show-PermissionPopup {
@@ -1548,6 +1604,11 @@ foreach ($n in @('TbCaName', 'TbCaCn', 'TbCaDays', 'TbSrvCertName', 'TbSrvCn', '
 }
 foreach ($n in @('RbCa4096', 'RbCa8192', 'RbCaEc', 'RbSrv4096', 'RbSrv8192', 'RbSrvEc', 'RbProtoTcp', 'RbProtoUdp', 'RbUaPap', 'RbUaMs', 'CbSetupFw', 'CbSetupRadius')) { $ui[$n].Add_Click({ Clear-SetupPlan }) }
 foreach ($n in @('PbRadSecret', 'PbCaBackup')) { $ui[$n].Add_PasswordChanged({ Clear-SetupPlan }) }
+$ui.BtnSetupToggle.Add_Click({
+        $cur = $ui.BdSetupRun.Visibility -eq 'Visible'
+        $script:SetupExpanded = -not $cur
+        Set-SetupMode -Configured $script:SetupConfigured
+    })
 $ui.BtnSetupPort.Add_Click({
         if (-not $script:State) { Show-Error 'Спочатку підключіться до роутера.'; return }
         $ui.TbSrvPort.Text = [string](Get-OvpnSuggestedPort $script:State)
@@ -1679,6 +1740,7 @@ if ($SmokeTest) {
                             "HOST=$($ui.TbHost.Text) ROUTES=$((Get-RoutesFromUi) -join ',') FRIENDLY=$($ui.TbFriendly.Text)",
                             "PERM-MISSING=$($script:SmokePerm.Missing -join ',')", "PERM-FIX:", ($script:SmokePerm.Fix -join "`r`n"),
                             "USERS=$($ui.LbUsers.Items.Count) USERPROFILE=$($ui.TbUserProfile.Text) MODE=$(Get-AuthMode) LOCALENABLED=$($ui.GrLocal.IsEnabled)",
+                            "SETUP-BANNER: $($ui.TbSetupBannerTitle.Text) | toggle=$($ui.BtnSetupToggle.Content) | runVis=$($ui.BdSetupRun.Visibility) | header2=$(if ($ui.TabSetup.Header -is [System.Windows.Controls.StackPanel]) { $ui.TabSetup.Header.Children[$ui.TabSetup.Header.Children.Count-1].Text })",
                             "SETUP-STATUS:", $ui.TbSetupStatus.Text, "CA-STATUS: $($ui.TbCaStatus.Text)", "SETUP-PLAN:", $ui.TbSetupPlan.Text,
                             "PLAN:", $ui.TbPlan.Text, "LOG:", $ui.TbLog.Text)
                         [System.IO.File]::WriteAllText((Join-Path $LogDir 'smoke.txt'), ($r -join "`r`n"), [System.Text.Encoding]::UTF8)

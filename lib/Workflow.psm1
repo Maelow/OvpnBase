@@ -161,7 +161,7 @@ function Get-OvpnBuildPlan {
     $L = New-Object System.Collections.Generic.List[string]
     $L.Add("РОУТЕР $($State.Identity) — зміни:")
     if ($P.DoBackup) { $L.Add("  • /export file=ovpn-backup-… → out\$($P.Year)\ (тимчасовий файл на роутері буде видалено)") }
-    $ids = Get-OvpnIdentities -P $P
+    $ids = @(Get-OvpnIdentities -P $P)
     if ($P.AuthMode -eq 'local') { $L.Add("  • режим: локальні користувачі — окремий сертифікат (CN=логін) і архіви на кожного ($($ids.Count))") }
     else { $L.Add('  • режим: RADIUS — один спільний сертифікат для всіх') }
     foreach ($id in $ids) {
@@ -255,7 +255,7 @@ function Invoke-OvpnBuild {
         } finally { try { Remove-RosFile $c "$fn.rsc" } catch { } }
     } else { Set-OvpnStep backup skip }
 
-    $ids = Get-OvpnIdentities -P $P
+    $ids = @(Get-OvpnIdentities -P $P)
     $result.Credentials = @()
 
     # 2. certificates

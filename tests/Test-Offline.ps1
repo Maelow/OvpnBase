@@ -105,7 +105,7 @@ if ($Router) {
     $P3 = $P2.Clone(); $P3.Users = @(@{ Name = $known[0]; Password = ''; IsNew = $true }, @{ Name = 'bad name'; Password = ''; IsNew = $true }, @{ Name = 'ghost'; Password = ''; IsNew = $false })
     $e3 = Test-OvpnParams -State $st -P $P3
     Assert (($e3 -match 'вже існує').Count -and ($e3 -match 'Некоректний логін').Count -and ($e3 -match 'немає на роутері').Count) 'local: ловить дубль, некоректний логін, неіснуючого'
-    $ids = Get-OvpnIdentities -P $P2
+    $ids = @(Get-OvpnIdentities -P $P2)
     Assert ($ids.Count -eq 3 -and $ids[1].CertName -eq "OVPN-CL-test.user1-$($P2.Year)" -and $ids[1].CertCn -eq 'test.user1') 'local: ідентичності CN=логін'
 
     Write-Host "== Read-only план: первинне налаштування"
