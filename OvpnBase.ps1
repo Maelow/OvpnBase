@@ -557,12 +557,20 @@ $xaml = @'
                     <StackPanel Grid.Column="3"><TextBlock Text="Ім'я нового сервера" Style="{StaticResource Lbl}"/><TextBox x:Name="TbNewServer"/></StackPanel>
                   </Grid>
                   <TextBlock x:Name="TbPortCheck" Style="{StaticResource Hint}" Margin="0,6,0,0"/>
-                  <CheckBox x:Name="CbSchedule" Content="Запланувати вимкнення старого сервера і прибрати його порт" Margin="0,12,0,4"/>
+                  <CheckBox x:Name="CbSchedule" Content="Запланувати перехід на роутері (scheduler виконається сам у вказаний час)" Margin="0,12,0,4"/>
                   <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="140"/><ColumnDefinition Width="14"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                     <StackPanel><TextBlock Text="Дата (yyyy-MM-dd)" Style="{StaticResource Lbl}"/><TextBox x:Name="TbCutDate"/></StackPanel>
                     <StackPanel Grid.Column="2"><TextBlock Text="Час" Style="{StaticResource Lbl}"/><TextBox x:Name="TbCutTime" Text="03:00"/></StackPanel>
                   </Grid>
+                  <TextBlock x:Name="TbCutHint" Style="{StaticResource Hint}" Margin="0,6,0,0"/>
+                  <StackPanel x:Name="SpCutOptions" Margin="0,6,0,0">
+                    <TextBlock Style="{StaticResource Hint}" Text="У цей момент: старий порт прибирається з правила MGMT_Allow, старий сервер вимикається, а також:"/>
+                    <CheckBox x:Name="CbCutRevoke" Content="Відкликати старий клієнтський сертифікат"/>
+                    <TextBlock Text="Старий сертифікат (ім'я на роутері; у режимі локальних користувачів — автоматично для кожного)" Style="{StaticResource Lbl}" Margin="22,2,0,4"/>
+                    <TextBox x:Name="TbOldCert" Margin="22,0,0,0"/>
+                    <CheckBox x:Name="CbCutRemoveSrv" Content="Видалити старий сервер (інакше лише вимкнути — його можна швидко увімкнути назад)" Margin="0,8,0,0"/>
+                  </StackPanel>
                 </StackPanel>
               </Border>
               <Border Style="{StaticResource Card}">
@@ -876,6 +884,7 @@ function Get-DefaultSettings {
         CertNameTpl = 'OVPN-CL-{year}'; CertCnTpl = 'CL-{year}'; NewServerTpl = 'ovpn-server-{year}'
         KeySize = '4096'; Digest = 'sha256'; Country = ''; SourceServer = ''; Modern = $true; DeleteOpen = $false; Backup = $true; Schedule = $true; IncludeReadme = $false
         AuthMode = 'radius'; UserCertTpl = 'OVPN-CL-{user}-{year}'; UserProfile = ''; SaveCredentials = $false
+        CutRevoke = $true; CutRemoveServer = $false
     }
 }
 
@@ -919,6 +928,7 @@ function Save-Settings {
         SourceServer = (Get-SelectedServerName); Modern = [bool]$ui.CbModern.IsChecked; DeleteOpen = [bool]$ui.CbDeleteOpen.IsChecked
         Backup = [bool]$ui.CbBackup.IsChecked; Schedule = [bool]$ui.CbSchedule.IsChecked; IncludeReadme = [bool]$ui.CbReadme.IsChecked
         AuthMode = (Get-AuthMode); UserCertTpl = $ui.TbUserCertTpl.Text.Trim(); UserProfile = $ui.TbUserProfile.Text.Trim(); SaveCredentials = [bool]$ui.CbSaveCreds.IsChecked
+        CutRevoke = [bool]$ui.CbCutRevoke.IsChecked; CutRemoveServer = [bool]$ui.CbCutRemoveSrv.IsChecked
     }
     try { ($s | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath $SettingsPath -Encoding UTF8 } catch { Write-OvpnLog -Level WARN "Не вдалося зберегти settings.json: $($_.Exception.Message)" }
 }
@@ -1134,6 +1144,7 @@ function Show-State {
     Update-PortCheck
     Update-UsersList
     Update-SetupUi
+    Update-CutDefaults
 
     # maintenance grids
     $certs = foreach ($cc in @($st.Certificates | Where-Object { $_['key-usage'] -match 'tls-client' -and $_['ca'] })) {
@@ -1200,9 +1211,7 @@ function Update-YearFields {
             $script:AutoValues[$pair[0]] = $v
         }
     }
-    if (-not $ui.TbCutDate.Text -or $ui.TbCutDate.Text -eq $script:AutoValues['TbCutDate']) {
-        $v = "$y-01-15"; $ui.TbCutDate.Text = $v; $script:AutoValues['TbCutDate'] = $v
-    }
+    Update-CutDefaults
     if (-not $ui.TbDays.Text -or $ui.TbDays.Text -eq $script:AutoValues['TbDays']) { Set-EoyDays; $script:AutoValues['TbDays'] = $ui.TbDays.Text }
     $ui.TbOutDir.Text = "Тека: $(Get-OutDir)"
     Clear-Plan
@@ -1239,10 +1248,11 @@ function Get-UiParams {
         FriendlyName = $ui.TbFriendly.Text.Trim(); PortalUrl = $ui.TbPortal.Text.Trim(); IncludeReadme = [bool]$ui.CbReadme.IsChecked; Modern = [bool]$ui.CbModern.IsChecked
         DeleteOpen = [bool]$ui.CbDeleteOpen.IsChecked; DoBackup = [bool]$ui.CbBackup.IsChecked; Schedule = [bool]$ui.CbSchedule.IsChecked
         CutDate = $ui.TbCutDate.Text.Trim(); CutTime = $ui.TbCutTime.Text.Trim()
+        RevokeOld = [bool]$ui.CbCutRevoke.IsChecked; RemoveOldServer = [bool]$ui.CbCutRemoveSrv.IsChecked
         OutDir = (Get-OutDir); ToolsDir = (Join-Path $Root 'tools\7z'); AllowList = $script:Settings.AllowList
         AuthMode = (Get-AuthMode); Users = @(Get-UiUsers); UserProfile = $ui.TbUserProfile.Text.Trim(); UserCertTpl = $ui.TbUserCertTpl.Text.Trim()
         SaveCredentials = [bool]$ui.CbSaveCreds.IsChecked
-    }
+    } | ForEach-Object { $_.OldCerts = @(Get-UiOldCerts $_); $_ }
 }
 
 function Get-UiErrors {
@@ -1272,6 +1282,45 @@ function Get-ParamsHash($P) {
     if (-not $P.ContainsKey('KeyPass')) { return (($copy.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value -join ',')" }) -join '|') }
     $copy['kp'] = $P.KeyPass.GetHashCode(); $copy['ap'] = $P.ArchivePass.GetHashCode()
     return (($copy.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value -join ',')" }) -join '|')
+}
+
+# ====================================================================== cutover helpers
+function Get-UiOldCerts($P) {
+    if ($P.AuthMode -eq 'local') {
+        if (-not $script:State) { return @() }
+        return @(Get-OvpnOldClientCerts -State $script:State -P $P)
+    }
+    $t = $ui.TbOldCert.Text.Trim()
+    if ($t) { return @($t) }
+    return @()
+}
+
+# Default cutover date = expiry day of the current (old) client certificate.
+function Update-CutDefaults {
+    $y = $ui.TbYear.Text.Trim()
+    if ($y -notmatch '^20\d\d$') { return }
+    $oldName = $null; $oldExp = $null
+    if ($script:State) {
+        $tmpP = @{ AuthMode = 'radius'; CertName = $ui.TbCertName.Text.Trim(); CertCn = $ui.TbCertCn.Text.Trim(); Year = [int]$y; Users = @(); UserCertTpl = $ui.TbUserCertTpl.Text.Trim() }
+        $cand = @(Get-OvpnOldClientCerts -State $script:State -P $tmpP)
+        if ($cand.Count) {
+            $oldName = $cand[0]
+            $oc = Get-StateCert $script:State $oldName
+            $oldExp = ConvertFrom-RosDate $oc['invalid-after']
+        }
+    }
+    if ($oldName -and (-not $ui.TbOldCert.Text -or $ui.TbOldCert.Text -eq $script:AutoValues['TbOldCert'])) {
+        $ui.TbOldCert.Text = $oldName; $script:AutoValues['TbOldCert'] = $oldName
+    }
+    $auto = if ($oldExp -and $oldExp -gt (Get-Date).AddHours(2)) { $oldExp.ToString('yyyy-MM-dd') } else { "$y-01-15" }
+    if (-not $ui.TbCutDate.Text -or $ui.TbCutDate.Text -eq $script:AutoValues['TbCutDate']) {
+        $ui.TbCutDate.Text = $auto; $script:AutoValues['TbCutDate'] = $auto
+    }
+    $ui.TbCutHint.Text = if ($oldExp) {
+        "Поточний сертифікат $oldName діє до {0:yyyy-MM-dd HH:mm} — за замовчуванням перехід у цей день (після нього старі профілі однаково не працюють)." -f $oldExp
+    } else { 'Поточний клієнтський сертифікат не визначено — вкажіть дату вручну.' }
+    $ui.SpCutOptions.IsEnabled = [bool]$ui.CbSchedule.IsChecked
+    $ui.SpCutOptions.Opacity = $(if ($ui.CbSchedule.IsChecked) { 1 } else { 0.45 })
 }
 
 # ====================================================================== users / setup helpers
@@ -1469,6 +1518,8 @@ if ($script:Settings.AuthMode -eq 'local') { $ui.RbModeLocal.IsChecked = $true }
 $ui.TbUserCertTpl.Text = $script:Settings.UserCertTpl
 $ui.TbUserProfile.Text = $script:Settings.UserProfile
 $ui.CbSaveCreds.IsChecked = [bool]$script:Settings.SaveCredentials
+$ui.CbCutRevoke.IsChecked = [bool]$script:Settings.CutRevoke
+$ui.CbCutRemoveSrv.IsChecked = [bool]$script:Settings.CutRemoveServer
 switch ($script:Settings.KeySize) { '4096' { $ui.RbK4096.IsChecked = $true } '8192' { $ui.RbK8192.IsChecked = $true } 'secp384r1' { $ui.RbKec.IsChecked = $true } default { $ui.RbK16384.IsChecked = $true } }
 if ($script:Settings.Digest -eq 'sha256') { $ui.RbD256.IsChecked = $true } else { $ui.RbD512.IsChecked = $true }
 $now = Get-Date
@@ -1506,7 +1557,9 @@ $ui.BtnDaysEoy.Add_Click({ Set-EoyDays })
 $ui.TbPort.Add_TextChanged({ Update-PortCheck; Clear-Plan })
 $ui.TbNewServer.Add_TextChanged({ Update-PortCheck; Clear-Plan })
 $ui.LbServers.Add_SelectionChanged({ Update-PortCheck; Clear-Plan })
-foreach ($n in @('TbHost', 'TbHost2', 'TbRoutes', 'TbCertName', 'TbCertCn', 'TbCountry', 'TbFriendly', 'TbPortal', 'TbCutDate', 'TbCutTime')) { $ui[$n].Add_TextChanged({ Clear-Plan }) }
+foreach ($n in @('TbHost', 'TbHost2', 'TbRoutes', 'TbCertName', 'TbCertCn', 'TbCountry', 'TbFriendly', 'TbPortal', 'TbCutDate', 'TbCutTime', 'TbOldCert')) { $ui[$n].Add_TextChanged({ Clear-Plan }) }
+foreach ($n in @('CbCutRevoke', 'CbCutRemoveSrv')) { $ui[$n].Add_Click({ Clear-Plan }) }
+$ui.CbSchedule.Add_Click({ Update-CutDefaults })
 foreach ($n in @('RbK4096', 'RbK8192', 'RbK16384', 'RbKec', 'RbD256', 'RbD512', 'CbModern', 'CbDeleteOpen', 'CbBackup', 'CbSchedule', 'CbReadme')) { $ui[$n].Add_Click({ Update-KeyHint; Clear-Plan }) }
 $ui.CbReadme.Add_Click({ $ui.TbPortal.IsEnabled = [bool]$ui.CbReadme.IsChecked })
 foreach ($n in @('PbKey1', 'PbKey2', 'PbArc1', 'PbArc2')) { $ui[$n].Add_PasswordChanged({ Clear-Plan }) }
@@ -1736,6 +1789,7 @@ if ($SmokeTest) {
                         $r = @("STATE=$([bool]$script:State)", "CHECKS=$(@($script:Checks).Count)", "GRID=$(@($ui.DgDiag.ItemsSource).Count)",
                             "SERVERS=$($ui.LbServers.Items.Count) SEL=$(Get-SelectedServerName)", "PORT=$($ui.TbPort.Text) :: $($ui.TbPortCheck.Text)",
                             "CERTS=$(@($ui.DgCerts.ItemsSource).Count) SRVGRID=$(@($ui.DgServers.ItemsSource).Count)", "SUMINFO=$($ui.TbSumInfo.Text) TIP1=$((@($ui.DgDiag.ItemsSource)[3]).Tip -replace "`n",' | ')", "STATUS=$($ui.TbStatus.Text)",
+                            "CUT-HINT=$($ui.TbCutHint.Text) OLD=$($ui.TbOldCert.Text) REVOKE=$($ui.CbCutRevoke.IsChecked) REMOVE=$($ui.CbCutRemoveSrv.IsChecked)",
                             "YEAR=$($ui.TbYear.Text) CERT=$($ui.TbCertName.Text) CN=$($ui.TbCertCn.Text) NEWSRV=$($ui.TbNewServer.Text) DAYS=$($ui.TbDays.Text) CUT=$($ui.TbCutDate.Text)",
                             "HOST=$($ui.TbHost.Text) ROUTES=$((Get-RoutesFromUi) -join ',') FRIENDLY=$($ui.TbFriendly.Text)",
                             "PERM-MISSING=$($script:SmokePerm.Missing -join ',')", "PERM-FIX:", ($script:SmokePerm.Fix -join "`r`n"),

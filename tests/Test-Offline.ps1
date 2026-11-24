@@ -79,6 +79,12 @@ Write-Host '== Допоміжні'
 Assert ((Get-NewDstPort '52431,8291,8728,8729' 52431 41663) -eq '52431,41663,8291,8728,8729') 'Get-NewDstPort вставляє після старого порту'
 Assert ((Get-NewDstPort '52431,41663,8291' 52431 41663) -eq '52431,41663,8291') 'Get-NewDstPort ідемпотентний'
 Assert (Test-PortInSpec '8000-8100,52431' 8050) 'Test-PortInSpec діапазон'
+$cs1 = Get-CutoverScript -RuleId '*64' -OldPort 1111 -OldServer 'srv-old' -SchedName 'cut'
+Assert ($cs1 -match 'server disable \[find name="srv-old"\]' -and $cs1 -notmatch 'issued-revoke' -and $cs1 -match 'scheduler remove') 'cutover: за замовчуванням лише вимкнення'
+$cs2 = Get-CutoverScript -RuleId '*64' -OldPort 1111 -OldServer 'srv-old' -SchedName 'cut' -RevokeCerts @('CL-OLD') -RemoveServer
+Assert ($cs2 -match 'server remove \[find name="srv-old"\]' -and $cs2 -match 'issued-revoke \[find name="CL-OLD"\]' -and $cs2 -notmatch 'server disable') 'cutover: відкликання + видалення сервера'
+$cs3 = Get-CutoverScript -SchedName 'cut' -RevokeCerts @('CL-OLD')
+Assert ($cs3 -notmatch 'firewall|ovpn-server' -and $cs3 -match 'issued-revoke') 'cutover без зміни порту: лише відкликання'
 Assert ((ConvertTo-WinArg 'a b"c\') -eq '"a b\"c\\"') 'ConvertTo-WinArg екранування'
 
 if ($Router) {
@@ -90,6 +96,10 @@ if ($Router) {
         VpnHost = 'vpn.example.com'; VpnHost2 = ''; Routes = $routes; CertName = "OVPN-CL-$((Get-Date).Year + 1)"; CertCn = "CL-$((Get-Date).Year + 1)"; Country = 'UA'
         KeySize = '16384'; Digest = 'sha512'; KeyPass = 'Passkey-123'; ArchivePass = $pw; FriendlyName = 'VPN'; PortalUrl = ''; Modern = $true; DeleteOpen = $false
         DoBackup = $true; Schedule = $true; CutDate = "$((Get-Date).Year + 1)-01-15"; CutTime = '03:00'; OutDir = $OutDir; ToolsDir = (Join-Path $root 'tools\7z'); AllowList = 'MGMT_Allow' }
+    $P.RevokeOld = $true; $P.RemoveOldServer = $false
+    $P.OldCerts = @(Get-OvpnOldClientCerts -State $st -P $P)
+    Write-Host "    старий сертифікат для відкликання: $($P.OldCerts -join ', ')"
+    Assert ($P.OldCerts.Count -eq 1) 'Get-OvpnOldClientCerts знаходить поточний сертифікат'
     $errs = Test-OvpnParams -State $st -P $P
     $errs | ForEach-Object { "    ! $_" }
     Assert ($errs.Count -eq 0) 'Test-OvpnParams без помилок'

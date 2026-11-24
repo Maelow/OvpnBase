@@ -21,7 +21,7 @@ $c = Connect-RouterOs -Address $Router -User $User -Password $Password
 $st = Get-RouterState -Connection $c
 $src = $st.Servers | Where-Object { -not (Test-RosTrue $_['disabled']) } | Select-Object -First 1
 $caName = (Get-StateCert $st $src['certificate'])['ca']
-$created = @{ Certs = @(); Secrets = @(); Rules = @(); Scripts = @() }
+$created = @{ Certs = @(); Secrets = @(); Rules = @(); Scripts = @(); Servers = @() }
 Write-Host "Роутер $($st.Identity), сервер $($src['name']):$($src['port']), CA $caName"
 
 try {
@@ -71,6 +71,22 @@ try {
     $r = Get-RosFirst $c '/ip/firewall/filter/print' -Query "?.id=$ruleId"
     Assert ($r['dst-port'] -eq '11111,33333') "dst-port після скрипта: '$($r['dst-port'])' (очікувалось 11111,33333)"
     Assert (Test-RosTrue $r['disabled']) 'тестове правило лишилось вимкненим'
+
+    Section 'C2. Перехід: відкликання сертифіката + видалення сервера (тимчасові обʼєкти)'
+    $oldCert = "$tag-OLDCERT"; $created.Certs += $oldCert
+    [void](New-OvpnClientCertificate -Connection $c -Name $oldCert -CommonName 'selftest-old' -KeySize '2048' -Days 1 -Digest 'sha256' -CaName $caName -SignTimeoutMin 5)
+    $dSrv = "$tag-oldsrv"; $created.Servers += $dSrv
+    $used = Get-UsedPorts $st; $dp = 61000; while ($used.ContainsKey($dp)) { $dp++ }
+    [void](Invoke-Ros $c '/interface/ovpn-server/server/add' -Arguments ([ordered]@{ 'copy-from' = $src['.id']; name = $dSrv; port = $dp; disabled = 'yes'; 'mac-address' = '02:00:5E:00:53:01'; comment = "$tag (safe to delete)" }))
+    Assert ((Get-RosFirst $c '/interface/ovpn-server/server/print' -Query "?name=$dSrv") -ne $null) "тимчасовий вимкнений сервер ${dSrv}:${dp} створено"
+    $scr2 = Get-CutoverScript -OldServer $dSrv -SchedName "$tag-cut2" -RevokeCerts @($oldCert) -RemoveServer
+    $sid2 = Invoke-RosRet $c '/system/script/add' -Arguments ([ordered]@{ name = "$tag-script2"; source = $scr2; policy = 'read,write,test' })
+    $created.Scripts += $sid2
+    [void](Invoke-RosItemCommand -Connection $c -Command '/system/script/run' -Id $sid2)
+    Start-Sleep -Seconds 2
+    Assert ((Get-RosFirst $c '/interface/ovpn-server/server/print' -Query "?name=$dSrv") -eq $null) 'скрипт видалив старий сервер'
+    $oc = Get-RosCert $c $oldCert
+    Assert (Test-RosTrue $oc['revoked']) "скрипт відкликав сертифікат (revoked=$($oc['revoked']))"
 
     # ------------------------------------------------------------------ D
     Section 'D. Первинне налаштування на налаштованому роутері + backup CA'
@@ -133,13 +149,15 @@ finally {
     Section 'Прибирання'
     foreach ($n in $created.Secrets) { $s = Get-RosFirst $c '/ppp/secret/print' -Query "?name=$n"; if ($s) { [void](Invoke-Ros $c '/ppp/secret/remove' -Arguments ([ordered]@{ '.id' = $s['.id'] })); "  - secret $n" } }
     foreach ($n in $created.Certs) { $x = Get-RosCert $c $n; if ($x) { [void](Invoke-Ros $c '/certificate/remove' -Arguments ([ordered]@{ '.id' = $x['.id'] })); "  - certificate $n" } }
+    foreach ($n in $created.Servers) { $x = Get-RosFirst $c '/interface/ovpn-server/server/print' -Query "?name=$n"; if ($x) { [void](Invoke-Ros $c '/interface/ovpn-server/server/remove' -Arguments ([ordered]@{ '.id' = $x['.id'] })); "  - ovpn server $n" } }
     foreach ($id in $created.Rules) { try { [void](Invoke-Ros $c '/ip/firewall/filter/remove' -Arguments ([ordered]@{ '.id' = $id })); "  - firewall $id" } catch { } }
     foreach ($id in $created.Scripts) { try { [void](Invoke-Ros $c '/system/script/remove' -Arguments ([ordered]@{ '.id' = $id })); "  - script $id" } catch { } }
     foreach ($f in @(Invoke-Ros $c '/file/print' | Where-Object { $_['name'] -like 'ovpnx-*' -or $_['name'] -like "$tag*" -or $_['name'] -like 'ovpn-backup-*' })) { Remove-RosFile $c $f['name']; "  - file $($f['name'])" }
     $leftC = @(Invoke-Ros $c '/certificate/print' | Where-Object { $_['name'] -like "$tag*" }).Count
     $leftS = @(Invoke-Ros $c '/ppp/secret/print' -Proplist @('name') | Where-Object { $_['name'] -like 'ovpnbase-selftest*' }).Count
     $leftR = @(Invoke-Ros $c '/ip/firewall/filter/print' | Where-Object { $_['comment'] -like "$tag*" }).Count
-    Assert ($leftC + $leftS + $leftR -eq 0) "на роутері не лишилось тестових об'єктів (cert=$leftC secret=$leftS rule=$leftR)"
+    $leftV = @(Invoke-Ros $c '/interface/ovpn-server/server/print' | Where-Object { $_['name'] -like "$tag*" }).Count
+    Assert ($leftC + $leftS + $leftR + $leftV -eq 0) "на роутері не лишилось тестових об'єктів (cert=$leftC secret=$leftS rule=$leftR server=$leftV)"
     Disconnect-RouterOs $c
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }

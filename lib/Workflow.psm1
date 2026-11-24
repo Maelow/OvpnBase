@@ -103,6 +103,17 @@ function Test-OvpnParams {
         $d = [datetime]::MinValue
         if (-not [datetime]::TryParseExact("$($P.CutDate) $($P.CutTime)", 'yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture, 'None', [ref]$d)) { $e.Add('Дата/час переходу: формат yyyy-MM-dd і HH:mm') }
         elseif ($d -lt $now.AddHours(1)) { $e.Add('Дата переходу має бути в майбутньому') }
+        if ($P.RevokeOld) {
+            $old = @($P.OldCerts | Where-Object { $_ })
+            $newNames = @(Get-OvpnIdentities -P $P | ForEach-Object { $_.CertName })
+            if ($old.Count -eq 0) { $e.Add('Відкликання старого сертифіката: не вказано / не знайдено старий сертифікат') }
+            foreach ($n in $old) {
+                $oc = Get-StateCert $State $n
+                if (-not $oc) { $e.Add("Старий сертифікат '$n' не знайдено на роутері") }
+                elseif (-not $oc['ca']) { $e.Add("'$n' не є виданим сертифікатом (немає CA) — відкликати неможливо") }
+                if ($newNames -contains $n) { $e.Add("'$n' — це новий сертифікат, його не можна відкликати") }
+            }
+        }
     }
     $ca = $null
     if ($src) { $sc = Get-StateCert $State $src['certificate']; if ($sc) { $ca = Get-StateCert $State $sc['ca'] } }
@@ -140,19 +151,63 @@ function Get-NewDstPort {
     return ($parts -join ',')
 }
 
+# RouterOS script for the one-shot cutover scheduler.
+# RuleId empty → port/server part is skipped (port did not change).
 function Get-CutoverScript {
-    param([string]$RuleId, [int]$OldPort, [string]$OldServer, [string]$SchedName)
-    return @"
-:local rid [/ip firewall filter find where .id=$RuleId]
-:local old "$OldPort"
-:local p [/ip firewall filter get `$rid dst-port]
-:local out ""
-:foreach x in=[:toarray `$p] do={ :if ([:tostr `$x] != `$old) do={ :if (`$out = "") do={ :set out [:tostr `$x] } else={ :set out (`$out . "," . [:tostr `$x]) } } }
-:if (`$out != "") do={ /ip firewall filter set `$rid dst-port=`$out }
-/interface ovpn-server server disable [find name="$OldServer"]
-:log warning "OVPN cutover: $OldServer disabled, port $OldPort removed from rule $RuleId"
-/system scheduler remove [find name="$SchedName"]
-"@
+    param([string]$RuleId, [int]$OldPort, [string]$OldServer, [string]$SchedName, [string[]]$RevokeCerts = @(), [switch]$RemoveServer)
+    $L = New-Object System.Collections.Generic.List[string]
+    $done = New-Object System.Collections.Generic.List[string]
+    if ($RuleId) {
+        $L.Add(":local rid [/ip firewall filter find where .id=$RuleId]")
+        $L.Add(":local old `"$OldPort`"")
+        $L.Add(':local p [/ip firewall filter get $rid dst-port]')
+        $L.Add(':local out ""')
+        $L.Add(':foreach x in=[:toarray $p] do={ :if ([:tostr $x] != $old) do={ :if ($out = "") do={ :set out [:tostr $x] } else={ :set out ($out . "," . [:tostr $x]) } } }')
+        $L.Add(':if ($out != "") do={ /ip firewall filter set $rid dst-port=$out }')
+        $done.Add("port $OldPort removed from rule $RuleId")
+    }
+    if ($OldServer) {
+        if ($RemoveServer) { $L.Add("/interface ovpn-server server remove [find name=`"$OldServer`"]"); $done.Add("server $OldServer removed") }
+        else { $L.Add("/interface ovpn-server server disable [find name=`"$OldServer`"]"); $done.Add("server $OldServer disabled") }
+    }
+    foreach ($cn in @($RevokeCerts | Where-Object { $_ })) {
+        $L.Add(":do { /certificate issued-revoke [find name=`"$cn`"] } on-error={ :log error `"OVPN cutover: revoke $cn failed`" }")
+        $done.Add("certificate $cn revoked")
+    }
+    $L.Add(":log warning `"OVPN cutover: $($done -join '; ')`"")
+    $L.Add("/system scheduler remove [find name=`"$SchedName`"]")
+    return ($L -join "`n")
+}
+
+# Previous client certificate(s) to revoke at cutover.
+#   radius: the valid client cert with the latest expiry, except the new one
+#   local : template with (Year-1) for every selected user, if present
+function Get-OvpnOldClientCerts {
+    param([Parameter(Mandatory)]$State, [Parameter(Mandatory)][hashtable]$P)
+    $newNames = @(Get-OvpnIdentities -P $P | ForEach-Object { $_.CertName })
+    $valid = @($State.Certificates | Where-Object {
+            $_['key-usage'] -match 'tls-client' -and $_['ca'] -and -not (Test-RosTrue $_['revoked']) -and -not (Test-RosTrue $_['expired']) -and $newNames -notcontains $_['name']
+        })
+    if ($P.AuthMode -eq 'local') {
+        return @(foreach ($u in @($P.Users)) {
+                $n = Expand-OvpnUserTpl $P.UserCertTpl $u.Name ($P.Year - 1)
+                if ($valid | Where-Object { $_['name'] -eq $n }) { $n }
+            })
+    }
+    $best = $valid | Where-Object { $_['common-name'] -ne $P.CertCn } | Sort-Object { ConvertFrom-RosDate $_['invalid-after'] } -Descending | Select-Object -First 1
+    if ($best) { return @($best['name']) }
+    return @()
+}
+
+function Get-CutoverSummary {
+    param([hashtable]$P, $X)
+    $a = @()
+    if ($X.PortChange) {
+        $a += "$(if ($P.RemoveOldServer) { 'видалити' } else { 'вимкнути' }) $($P.SourceServer)"
+        $a += "прибрати порт $($X.SrcPort) з правила $($X.AllowRule['.id'])"
+    }
+    if ($P.RevokeOld -and @($P.OldCerts).Count) { $a += "відкликати $(@($P.OldCerts) -join ', ')" }
+    return ($a -join '; ')
 }
 
 function Get-OvpnBuildPlan {
@@ -192,10 +247,13 @@ function Get-OvpnBuildPlan {
         if (-not $ns) { $L.Add("  • /interface ovpn-server server enable $($P.NewServerName)") }
         $L.Add("  • $($P.SourceServer) (порт $($x.SrcPort)) продовжує працювати")
         if ($P.Schedule) {
-            $L.Add("  • /system scheduler add name=ovpn-cutover-$($P.Year) $($P.CutDate) $($P.CutTime): вимкнути $($P.SourceServer), прибрати порт $($x.SrcPort) з правила $($x.AllowRule['.id'])")
+            $L.Add("  • /system scheduler add name=ovpn-cutover-$($P.Year) $($P.CutDate) $($P.CutTime): $(Get-CutoverSummary $P $x)")
         }
     } else {
         $L.Add("  • порт не змінюється ($($P.Port)) — сервер і firewall без змін")
+        if ($P.Schedule -and $P.RevokeOld -and @($P.OldCerts).Count) {
+            $L.Add("  • /system scheduler add name=ovpn-cutover-$($P.Year) $($P.CutDate) $($P.CutTime): $(Get-CutoverSummary $P $x)")
+        }
     }
     $L.Add('')
     $L.Add("ЛОКАЛЬНО (out\$($P.Year)):")
@@ -362,15 +420,30 @@ function Invoke-OvpnBuild {
             $sd = if ($ver -ge [version]'7.10') { $d.ToString('yyyy-MM-dd') } else { $d.ToString('MMM/dd/yyyy', [Globalization.CultureInfo]::InvariantCulture).ToLower() }
             [void](Invoke-Ros $c '/system/scheduler/add' -Arguments ([ordered]@{
                         name = $sn; 'start-date' = $sd; 'start-time' = "$($P.CutTime):00"; interval = '0s'
-                        policy = 'read,write,test'; comment = "OvpnBase: вимкнути $($P.SourceServer), прибрати порт $($x.SrcPort)"
-                        'on-event' = (Get-CutoverScript -RuleId $rule['.id'] -OldPort $x.SrcPort -OldServer $P.SourceServer -SchedName $sn)
+                        policy = 'read,write,test'; comment = "OvpnBase: $(Get-CutoverSummary $P $x)"
+                        'on-event' = (Get-CutoverScript -RuleId $rule['.id'] -OldPort $x.SrcPort -OldServer $P.SourceServer -SchedName $sn `
+                            -RevokeCerts $(if ($P.RevokeOld) { @($P.OldCerts) } else { @() }) -RemoveServer:([bool]$P.RemoveOldServer))
                     }))
             Set-OvpnStep schedule ok "$sn $($P.CutDate) $($P.CutTime)"
         } else { Set-OvpnStep schedule skip }
     } else {
         Set-OvpnStep server skip 'порт не змінюється'
         Set-OvpnStep firewall skip
-        Set-OvpnStep schedule skip
+        if ($P.Schedule -and $P.RevokeOld -and @($P.OldCerts).Count) {
+            Set-OvpnStep schedule run
+            $sn = "ovpn-cutover-$($P.Year)"
+            $ex = Get-RosFirst $c '/system/scheduler/print' -Query "?name=$sn"
+            if ($ex) { [void](Invoke-Ros $c '/system/scheduler/remove' -Arguments ([ordered]@{ '.id' = $ex['.id'] })) }
+            $ver = Get-RosVersion (Get-RosVal $st.Resource 'version')
+            $d = [datetime]::ParseExact($P.CutDate, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+            $sd = if ($ver -ge [version]'7.10') { $d.ToString('yyyy-MM-dd') } else { $d.ToString('MMM/dd/yyyy', [Globalization.CultureInfo]::InvariantCulture).ToLower() }
+            [void](Invoke-Ros $c '/system/scheduler/add' -Arguments ([ordered]@{
+                        name = $sn; 'start-date' = $sd; 'start-time' = "$($P.CutTime):00"; interval = '0s'
+                        policy = 'read,write,test'; comment = "OvpnBase: $(Get-CutoverSummary $P $x)"
+                        'on-event' = (Get-CutoverScript -SchedName $sn -RevokeCerts @($P.OldCerts))
+                    }))
+            Set-OvpnStep schedule ok "$sn $($P.CutDate) $($P.CutTime)"
+        } else { Set-OvpnStep schedule skip }
     }
 
     # 7. profiles
@@ -437,6 +510,10 @@ function Invoke-OvpnBuild {
         $rep.Add("Новий сервер: $($P.NewServerName):$($P.Port); старий $($P.SourceServer):$($x.SrcPort) працює" + $(if ($P.Schedule) { " до $($P.CutDate) $($P.CutTime) (scheduler ovpn-cutover-$($P.Year))" } else { ' (вимкнути вручну)' }))
         $rep.Add("Firewall: правило $($x.AllowRule['.id']) src-address-list=$($st.AllowList)")
     }
+    if ($P.Schedule) {
+        $sum = Get-CutoverSummary $P $x
+        if ($sum) { $rep.Add("Перехід $($P.CutDate) $($P.CutTime): $sum") }
+    }
     $rep.Add("Маршрути: $(($P.Routes | Where-Object { $_.Trim() }) -join ', ')")
     $rep.Add("Профіль: $(if ($P.Modern) { 'сучасний (remote-cert-tls, verify-x509-name, data-ciphers, tls-version-min 1.2)' } else { 'сумісний з попереднім' })")
     $rep.Add('Файли:')
@@ -477,5 +554,5 @@ function Remove-OvpnScheduler {
     [void](Invoke-Ros $Connection '/system/scheduler/remove' -Arguments ([ordered]@{ '.id' = $s['.id'] }))
 }
 
-Export-ModuleMember -Function Get-OvpnStepDefs, Get-OvpnIdentities, Expand-OvpnUserTpl, New-OvpnSecret, Test-OvpnParams, Get-OvpnBuildPlan, Invoke-OvpnBuild, Get-NewDstPort, Get-CutoverScript,
+Export-ModuleMember -Function Get-OvpnOldClientCerts, Get-CutoverSummary, Get-OvpnStepDefs, Get-OvpnIdentities, Expand-OvpnUserTpl, New-OvpnSecret, Test-OvpnParams, Get-OvpnBuildPlan, Invoke-OvpnBuild, Get-NewDstPort, Get-CutoverScript,
     Set-OvpnServerEnabled, Remove-OvpnPortFromAllowRule, Remove-OvpnScheduler
