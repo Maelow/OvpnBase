@@ -1,0 +1,32 @@
+# ---- Private / environment-specific data (never commit) ----
+# Local settings: router address, API user, hosts, routes
+settings.json
+# Real previous-year profiles (contain certificate + private key)
+sample/
+# Build output: certificates, keys, archives, CA backup, router config backup
+out/
+# Runtime logs
+logs/
+
+# ---- Secrets by type (anywhere in the tree) ----
+*.ovpn
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+*.rsc
+*.backup
+credentials*.csv
+*.zip
+*.7z
+*.exe
+# portable 7-Zip is part of the tool
+!tools/7z/7z.exe
+
+# ---- Editor / OS / tooling ----
+.vscode/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
